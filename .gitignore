@@ -1,0 +1,10 @@
+threejs-fps-02-kit/
+out/
+out2/
+node_modules/
+package-lock.json
+package.json
+wallet.json
+transcripts.tar.gz
+*.log
+.DS_Store
