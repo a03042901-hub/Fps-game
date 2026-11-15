@@ -11,7 +11,8 @@ import { buildNav } from './nav.js';
 import { createPlayer, stepPlayer, eyePos, lookDir } from './player.js';
 import { tickWeapons, tryFire, beginReload, switchSlot } from './weapons.js';
 import {
-  createBots, setupRoundBots, stepBots, syncBotMeshes, hearEvent, HEAR_SHOT, HEAR_STEP,
+  createBots, setupRoundBots, stepBots, syncBotMeshes, hearEvent, flashBot,
+  HEAR_SHOT, HEAR_STEP,
 } from './bots.js';
 import { startMatch, beginRound, tickRound, resolveObjective } from './rounds.js';
 import { buyItem, rewardKill } from './economy.js';
@@ -19,6 +20,8 @@ import { tickBomb, interruptDefuse, dropBomb, pickupBomb } from './bomb.js';
 import { initGrenades, tickGrenades, throwFrag, throwSmoke } from './grenades.js';
 import { createHud } from './hud.js';
 import { audio } from './audio.js';
+import { createViewmodel } from './viewmodel.js';
+import { createEffects } from './effects.js';
 
 const params = new URLSearchParams(location.search);
 const shot = params.get('shot');
@@ -37,40 +40,60 @@ const rng = mulberry32(seed);
 const state = createState();
 state.seed = seed;
 state.shot = shot;
-state.playerTeam = 1; // Wardens by default
+state.playerTeam = 1;
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setSize(innerWidth, innerHeight);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.35;
 document.getElementById('game').appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(PALETTE.sky);
-scene.fog = new THREE.Fog(PALETTE.fog, 28, 95);
+// Sky gradient via large dome
+const skyGeo = new THREE.SphereGeometry(140, 16, 12);
+const skyMat = new THREE.ShaderMaterial({
+  side: THREE.BackSide,
+  uniforms: {
+    top: { value: new THREE.Color(0x7eb4d4) },
+    bot: { value: new THREE.Color(0xd4c4a0) },
+  },
+  vertexShader: 'varying vec3 vP; void main(){ vP=normalize(position); gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }',
+  fragmentShader: 'uniform vec3 top; uniform vec3 bot; varying vec3 vP; void main(){ float h=clamp(vP.y*0.5+0.5,0.0,1.0); gl_FragColor=vec4(mix(bot,top,h),1.0); }',
+});
+scene.add(new THREE.Mesh(skyGeo, skyMat));
+scene.fog = new THREE.Fog(0xd8c8a8, 48, 125);
 
 const camera = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.05, 160);
 scene.add(camera);
 
-// Lighting: directional sun + hemisphere fill
-const hemi = new THREE.HemisphereLight(0xc8dce8, 0x8a7048, 0.55);
+const ambient = new THREE.AmbientLight(0xfff0e0, 0.35);
+scene.add(ambient);
+const hemi = new THREE.HemisphereLight(0xeef6fc, 0xd0b888, 0.85);
 scene.add(hemi);
-const sun = new THREE.DirectionalLight(0xfff0d8, 1.15);
-sun.position.set(30, 48, 12);
+const sun = new THREE.DirectionalLight(0xfff8ea, 1.7);
+sun.position.set(28, 55, 22);
 sun.castShadow = true;
 sun.shadow.mapSize.set(2048, 2048);
 sun.shadow.camera.near = 2;
-sun.shadow.camera.far = 120;
-sun.shadow.camera.left = -55;
-sun.shadow.camera.right = 55;
-sun.shadow.camera.top = 55;
-sun.shadow.camera.bottom = -55;
+sun.shadow.camera.far = 130;
+sun.shadow.camera.left = -60;
+sun.shadow.camera.right = 60;
+sun.shadow.camera.top = 60;
+sun.shadow.camera.bottom = -60;
+sun.shadow.bias = -0.0002;
+sun.shadow.normalBias = 0.03;
 scene.add(sun);
+scene.add(sun.target);
 
 const map = createMap(scene);
 const nav = buildNav();
 initGrenades(scene);
+const effects = createEffects(scene);
+const viewmodel = createViewmodel(camera);
 
 const player = createPlayer(map.spawns.wardens[0]);
 player.isPlayer = true;
@@ -80,15 +103,22 @@ giveWeapon(player.loadout, 'rifle');
 const bots = createBots(scene, 9);
 const actors = [player, ...bots];
 
-// Bomb mesh
-const bombMesh = new THREE.Mesh(
-  new THREE.BoxGeometry(0.5, 0.28, 0.65),
-  new THREE.MeshStandardMaterial({ color: 0x1a1810, emissive: 0xd4652a, emissiveIntensity: 0.55, roughness: 0.5 }),
+const bombMesh = new THREE.Group();
+const bombBody = new THREE.Mesh(
+  new THREE.BoxGeometry(0.7, 0.35, 0.9),
+  new THREE.MeshStandardMaterial({ color: 0x2a2818, emissive: 0xff6622, emissiveIntensity: 0.85, roughness: 0.4, metalness: 0.45 }),
 );
-bombMesh.castShadow = true;
+bombBody.castShadow = true;
+bombMesh.add(bombBody);
+const bombAnt = new THREE.Mesh(
+  new THREE.BoxGeometry(0.06, 0.45, 0.06),
+  new THREE.MeshStandardMaterial({ color: 0x888880, emissive: 0xffaa44, emissiveIntensity: 0.4 }),
+);
+bombAnt.position.y = 0.35;
+bombMesh.add(bombAnt);
 bombMesh.visible = false;
 scene.add(bombMesh);
-const bombLight = new THREE.PointLight(0xff6622, 0, 6);
+const bombLight = new THREE.PointLight(0xff7722, 0, 10);
 bombLight.visible = false;
 scene.add(bombLight);
 
@@ -100,6 +130,7 @@ const _dir = { x: 0, y: 0, z: 0 };
 let accumulator = 0;
 let last = performance.now();
 let stepAcc = 0;
+let prevReload = 0;
 
 document.getElementById('play').addEventListener('click', () => {
   if (shot) return;
@@ -110,19 +141,10 @@ document.getElementById('play').addEventListener('click', () => {
   input.requestLock();
 });
 
-// Test hook (playwright / manual QA) — not used by the judge
 window.__saltline = {
   state, player, bots, map,
-  forceLive() {
-    state.phase = 'live';
-    state.phaseT = 90;
-    state.buyOpen = false;
-  },
-  skipBuy() {
-    state.phase = 'live';
-    state.phaseT = 90;
-    state.buyOpen = false;
-  },
+  forceLive() { state.phase = 'live'; state.phaseT = 90; state.buyOpen = false; },
+  skipBuy() { state.phase = 'live'; state.phaseT = 90; state.buyOpen = false; },
   unlockFire() { input.mouse.locked = true; },
 };
 
@@ -142,31 +164,42 @@ function countAlive(team) {
 function onDamage(victim, amount, fromX, fromZ) {
   if (victim === player) {
     interruptDefuse(state);
-    // Damage direction indicator
     const ang = Math.atan2(fromX - player.x, fromZ - player.z) - player.yaw;
     let sector = Math.round(((ang / (Math.PI * 2)) + 1) * 4) % 8;
     if (sector < 0) sector += 8;
     state.dmgDirs[sector] = 1;
+  } else if (victim.botIndex != null) {
+    flashBot(victim.botIndex);
   }
   if (victim.hp <= 0) {
     victim.hp = 0;
     victim.alive = false;
-    if (victim.isPlayer) dropBomb(state, victim);
-    else dropBomb(state, victim);
+    dropBomb(state, victim);
   }
 }
 
-function onPlayerHit(hit, dmg, wid) {
+function handleShot(hit, dmg, wid, ray) {
+  if (ray) {
+    const dist = hit ? hit.t : 40;
+    effects.tracer(ray.ox, ray.oy, ray.oz, ray.dx, ray.dy, ray.dz, dist);
+    if (hit) {
+      effects.impact(hit.x, hit.y, hit.z, -ray.dx, -ray.dy, -ray.dz);
+    } else {
+      effects.impact(ray.ox + ray.dx * 35, Math.max(0.05, ray.oy + ray.dy * 35), ray.oz + ray.dz * 35, 0, 1, 0);
+    }
+  }
+  viewmodel.onFire();
+  if (!hit) return;
   hud.flashHit();
   state.hitMarker = 0.1;
   audio.hit();
   hearEvent(bots, player.x, player.z, HEAR_SHOT, 'shot');
+  if (hit.actor.botIndex != null) flashBot(hit.actor.botIndex);
   if (hit.actor.hp <= 0) {
     hit.actor.alive = false;
     hit.actor.hp = 0;
     rewardKill(state, wid);
-    const part = hit.part === 'head' ? ' HS' : '';
-    hud.pushFeed('You' + part + ' → ' + (hit.actor.team === 1 ? 'Warden' : 'Raider'));
+    hud.pushFeed('You' + (hit.part === 'head' ? ' HS' : '') + ' → ' + (hit.actor.team === 1 ? 'Warden' : 'Raider'));
     dropBomb(state, hit.actor);
   } else {
     onDamage(hit.actor, dmg, player.x, player.z);
@@ -176,20 +209,16 @@ function onPlayerHit(hit, dmg, wid) {
 function simStep(dt) {
   if (state.frozen) return;
 
-  // Decay dmg dirs
   for (let i = 0; i < 8; i++) state.dmgDirs[i] = Math.max(0, state.dmgDirs[i] - dt * 1.8);
   if (state.hitMarker > 0) state.hitMarker -= dt;
 
   if (state.phase === 'menu') return;
 
-  // Buy keys
   if (state.phase === 'buy' || state.buyOpen) {
     for (let i = 0; i < 6; i++) {
       if (input.eat('Digit' + (i + 1))) buyItem(state, player, i);
     }
     if (input.eat('KeyB')) state.buyOpen = !state.buyOpen;
-  } else if (input.eat('KeyB') && state.phase === 'live') {
-    // B only opens during buy
   }
 
   if (player.alive && (state.phase === 'buy' || state.phase === 'live')) {
@@ -201,14 +230,15 @@ function simStep(dt) {
     if (input.eat('Digit1')) switchSlot(player.loadout, 1);
     if (input.eat('Digit2')) switchSlot(player.loadout, 2);
 
-    // Fire
+    if (player.loadout.reloading > 0 && prevReload <= 0) viewmodel.onReload(player.loadout.reloading);
+    prevReload = player.loadout.reloading;
+
     if (input.mouse.down && input.mouse.locked && state.phase === 'live') {
       eyePos(player, _eye);
       lookDir(player, _dir);
-      tryFire(player, player.loadout, _eye.x, _eye.y, _eye.z, _dir.x, _dir.y, _dir.z, actors, rng, onPlayerHit);
+      tryFire(player, player.loadout, _eye.x, _eye.y, _eye.z, _dir.x, _dir.y, _dir.z, actors, rng, handleShot);
     }
 
-    // Grenades
     if (state.phase === 'live') {
       if (input.eat('KeyG') && player.loadout.frag > 0) {
         eyePos(player, _eye); lookDir(player, _dir);
@@ -223,7 +253,6 @@ function simStep(dt) {
       }
     }
 
-    // Footstep hear
     stepAcc += dt;
     if (player.grounded && Math.hypot(player.vx, player.vz) > 1.2 && stepAcc > (player.walking || player.crouch ? 0.55 : 0.38)) {
       stepAcc = 0;
@@ -234,24 +263,20 @@ function simStep(dt) {
     }
 
     if (!state.bomb.planted && state.bomb.carrier < 0) pickupBomb(state, player);
+    viewmodel.update(dt, player, player.loadout, input.mouse.down);
   }
 
   if (state.phase === 'live' || state.phase === 'buy') {
     stepBots(bots, player, actors, nav, state, map, dt, rng, (killer, victim, wid, part) => {
-      const kn = killer.team === 1 ? 'Warden' : 'Raider';
-      const vn = victim.team === 1 ? 'Warden' : 'Raider';
-      hud.pushFeed(kn + (part === 'head' ? ' HS' : '') + ' → ' + vn);
+      hud.pushFeed((killer.team === 1 ? 'Warden' : 'Raider') + (part === 'head' ? ' HS' : '') + ' → ' + (victim.team === 1 ? 'Warden' : 'Raider'));
       if (victim === player) onDamage(player, 999, killer.x, killer.z);
+      else if (victim.botIndex != null) flashBot(victim.botIndex);
       dropBomb(state, victim);
       hearEvent(bots, killer.x, killer.z, HEAR_SHOT, 'shot');
     });
 
-    const holdingE = input.pressed('KeyE');
-    const bombRes = tickBomb(state, actors, map.sites, dt, holdingE, player);
-    const obj = resolveObjective(state, bombRes);
-    if (obj === 'next' || obj === 'end' || obj === 'planted') {
-      /* planted handled */
-    }
+    const bombRes = tickBomb(state, actors, map.sites, dt, input.pressed('KeyE'), player);
+    resolveObjective(state, bombRes);
   }
 
   tickGrenades(dt, actors, (a, dmg, frag) => {
@@ -262,39 +287,36 @@ function simStep(dt) {
       dropBomb(state, a);
       hud.pushFeed('Frag → ' + (a.team === 1 ? 'Warden' : 'Raider'));
     }
-  });
+  }, (x, y, z) => effects.explode(x, y, z));
 
   const ev = tickRound(state, dt, countAlive(1), countAlive(2));
   if (ev === 'next') beginRound(state, player, bots, map, nav, rng);
   if (ev === 'restart') startMatch(state, player, bots, map, nav, rng);
-  if (ev === 'end') { /* overlay via hud */ }
 
-  syncBotMeshes(bots);
-
+  syncBotMeshes(bots, dt);
+  effects.update(dt);
   syncBombVisual();
-  if (state.bomb.planted) {
-    bombLight.intensity = 1.2 + Math.sin(state.bomb.fuse * 8) * 0.5;
-  }
+  if (state.bomb.planted) bombLight.intensity = 1.2 + Math.sin(state.bomb.fuse * 8) * 0.5;
 }
 
 function syncBombVisual() {
   if (state.bomb.planted) {
     bombMesh.visible = true;
-    bombMesh.position.set(state.bomb.x, 0.18, state.bomb.z);
+    bombMesh.position.set(state.bomb.x, 0.22, state.bomb.z);
     bombLight.visible = true;
-    bombLight.position.set(state.bomb.x, 0.4, state.bomb.z);
-    bombLight.intensity = 1.4;
+    bombLight.position.set(state.bomb.x, 0.6, state.bomb.z);
+    bombLight.intensity = 2.2;
   } else if (state.bomb.carrier === 0) {
     bombMesh.visible = false;
     bombLight.visible = false;
   } else if (state.bomb.carrier > 0) {
     const c = bots[state.bomb.carrier - 1];
     bombMesh.visible = !!(c && c.alive);
-    if (c && c.alive) bombMesh.position.set(c.x, 1.1, c.z);
+    if (c && c.alive) bombMesh.position.set(c.x, 1.2, c.z);
     bombLight.visible = false;
   } else {
     bombMesh.visible = true;
-    bombMesh.position.set(state.bomb.x, 0.18, state.bomb.z);
+    bombMesh.position.set(state.bomb.x, 0.22, state.bomb.z);
     bombLight.visible = false;
   }
 }
@@ -325,52 +347,56 @@ function frame(now) {
   requestAnimationFrame(frame);
 }
 
-// ---------- Screenshot / shot modes ----------
 function setupShot() {
   state.frozen = false;
   startMatch(state, player, bots, map, nav, rng);
-  // Warm a few ticks for nav
   for (let i = 0; i < 30; i++) simStep(FIXED_DT);
 
   if (shot === 'buy') {
     state.phase = 'buy';
-    state.phaseT = 12;
+    state.phaseT = 14;
     state.buyOpen = true;
-    state.money = 5400;
+    state.money = 800;
+    state.scoreW = 0; state.scoreR = 0; state.round = 1;
     player.loadout = makeLoadout();
     giveWeapon(player.loadout, 'sidearm');
-    player.x = 4; player.z = 26; player.yaw = Math.PI * 0.92; player.pitch = -0.06;
+    player.x = 2; player.z = 28; player.yaw = Math.PI * 0.85; player.pitch = -0.08;
     player.alive = true; player.hp = 100; player.armor = 0;
-    // Visible ally for depth
+    viewmodel.show('sidearm');
+    viewmodel.update(0, player, player.loadout, false);
+    let ai = 0;
     for (const b of bots) {
-      if (b.team === 1) { b.alive = true; b.x = 8; b.z = 18; b.yaw = Math.PI; break; }
+      if (b.team === 1) { b.alive = true; b.x = 6 + ai * 2; b.z = 20; b.yaw = Math.PI; ai++; }
     }
   } else if (shot === 'plant') {
     state.phase = 'live';
     state.phaseT = 40;
     state.buyOpen = false;
+    state.money = 2700;
     state.bomb.planted = true;
     state.bomb.site = 1;
     state.bomb.fuse = 22;
     state.bomb.x = 32; state.bomb.y = 0.1; state.bomb.z = 28;
-    state.bomb.defuseProgress = 2.1;
+    state.bomb.defuseProgress = 1.8;
     state.bomb.carrier = -1;
     player.team = 1;
-    // Close view of glowing bomb on site A decal + defuse progress
-    player.x = 31.2; player.z = 26.4; player.y = 0;
-    player.yaw = Math.atan2(-(32 - 31.2), -(28 - 26.4));
-    player.pitch = -0.55;
+    player.x = 29.5; player.z = 24.8; player.y = 0;
+    player.yaw = Math.atan2(-(32 - 29.5), -(28 - 24.8));
+    player.pitch = -0.35;
     player.alive = true; player.hp = 72; player.armor = 45;
     player.crouch = true; player.eye = 1.05;
     giveWeapon(player.loadout, 'rifle');
-    // Push enemies aside so bomb reads clearly
+    viewmodel.show('rifle');
+    viewmodel.update(0, player, player.loadout, false);
+    let ei = 0, ai = 0;
     for (const b of bots) {
       if (b.team === 2) {
-        b.alive = true; b.hp = 40;
-        b.x = 37; b.z = 33; b.y = 0;
-        b.yaw = Math.PI;
+        b.alive = true; b.hp = 55;
+        b.x = 34.5 + (ei % 2); b.z = 30.5 - ei * 0.8; b.y = 0;
+        b.yaw = Math.PI * 0.9; ei++;
       } else {
-        b.x = 24; b.z = 22;
+        b.alive = true;
+        b.x = 26.5 + ai * 1.2; b.z = 23 + ai * 0.4; b.yaw = 0.4; ai++;
       }
     }
   } else if (shot === 'round') {
@@ -382,50 +408,68 @@ function setupShot() {
     state.winner = 1;
     state.endReason = 'defuse';
     state.playerTeam = 1;
-    player.alive = true;
-    player.x = 16; player.z = 8; player.yaw = -0.8; player.pitch = -0.1;
+    state.money = 4850;
+    player.alive = true; player.hp = 64; player.armor = 20;
+    // Look across mid toward site A / crane — readable end frame
+    player.x = 12; player.z = 6; player.yaw = -1.15; player.pitch = -0.04;
+    giveWeapon(player.loadout, 'rifle');
+    viewmodel.show('rifle');
+    viewmodel.update(0, player, player.loadout, false);
+    let ai = 0;
+    for (const b of bots) {
+      if (b.team === 1) {
+        b.alive = true; b.hp = 80;
+        b.x = 16 + ai * 1.5; b.z = 10 + (ai % 2); b.yaw = -1;
+        ai++;
+      } else { b.alive = false; }
+    }
   } else {
-    // cover — action at site A with enemy in crosshair
+    // cover — open firefight at site A: gun, enemies, props, HUD
     state.phase = 'live';
     state.phaseT = 78;
     state.buyOpen = false;
     state.scoreW = 3; state.scoreR = 2;
     state.money = 4100;
     player.team = 1;
-    player.x = 27; player.z = 20; player.y = 0;
-    // Aim at enemy standing on site A
-    const ex = 32.5, ez = 29.5;
+    player.x = 29; player.z = 21; player.y = 0;
+    const ex = 32.5, ez = 29.2;
     player.yaw = Math.atan2(-(ex - player.x), -(ez - player.z));
-    player.pitch = -0.12;
+    player.pitch = -0.06;
     player.alive = true; player.hp = 81; player.armor = 70;
     player.loadout = makeLoadout();
     giveWeapon(player.loadout, 'rifle');
     player.loadout.primary.mag = 22;
     player.loadout.armor = 70;
-    let placedEnemy = false;
+    viewmodel.show('rifle');
+    viewmodel.onFire();
+    viewmodel.update(0, player, player.loadout, true);
+    const enemySpots = [[ex, ez], [35.5, 27], [34, 31]];
+    let ei = 0;
     for (const b of bots) {
-      if (b.team === 2 && !placedEnemy) {
-        b.alive = true; b.hp = 60;
-        b.x = ex; b.z = ez; b.y = 0;
-        b.yaw = player.yaw + Math.PI;
-        placedEnemy = true;
-      } else if (b.team === 2) {
-        b.alive = true; b.x = 36; b.z = 24; b.yaw = Math.PI;
-      }
+      if (b.team !== 2) continue;
+      b.alive = true; b.hp = 55;
+      b.x = enemySpots[ei % 3][0]; b.z = enemySpots[ei % 3][1]; b.y = 0;
+      b.yaw = player.yaw + Math.PI; ei++;
     }
     let ai = 0;
     for (const b of bots) {
       if (b.team !== 1) continue;
       b.alive = true;
-      b.x = 22 + ai * 1.8; b.z = 16 + ai * 0.8; b.yaw = player.yaw;
+      b.x = 25 + ai * 1.4; b.z = 18 + (ai % 2); b.yaw = player.yaw;
       ai++;
     }
     state.bomb.carrier = 5;
-    state.hitMarker = 0.08;
+    state.hitMarker = 0.1;
+    hud.flashHit();
+    eyePos(player, _eye);
+    lookDir(player, _dir);
+    effects.tracer(_eye.x, _eye.y, _eye.z, _dir.x, _dir.y, _dir.z, 12);
+    effects.impact(ex, 1.15, ez, 0, 1, 0);
+    effects.impact(ex + 0.8, 0.95, ez - 0.4, 0, 1, 0);
   }
 
-  syncBotMeshes(bots);
-  // Render twice then freeze
+  syncBotMeshes(bots, 0);
+  effects.update(0.016);
   render();
   render();
   state.frozen = true;
@@ -433,15 +477,14 @@ function setupShot() {
 }
 
 if (shot) {
-  // Auto-start without click
   document.getElementById('overlay').hidden = true;
   setupShot();
   requestAnimationFrame(frame);
 } else {
   state.phase = 'menu';
   setupRoundBots(bots, map, nav, 1, rng);
-  syncBotMeshes(bots);
-  // Place player at spawn for menu backdrop
-  player.x = 0; player.z = 20; player.yaw = 0; player.pitch = -0.1;
+  syncBotMeshes(bots, 0);
+  player.x = 0; player.z = 18; player.yaw = 0.2; player.pitch = -0.08;
+  viewmodel.show('rifle');
   requestAnimationFrame(frame);
 }

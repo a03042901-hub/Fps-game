@@ -83,13 +83,17 @@ export function tryFire(actor, loadout, lookOx, lookOy, lookOz, ldx, ldy, ldz, a
 
   audio.shot(def.id === 'sniper' || def.id === 'rifle');
   const hit = hitscan(lookOx, lookOy, lookOz, _dir.x, _dir.y, _dir.z, actors, actor.team, 120);
-  if (!hit) return true;
+  const ray = { ox: lookOx, oy: lookOy, oz: lookOz, dx: _dir.x, dy: _dir.y, dz: _dir.z };
+  if (!hit) {
+    if (onHit) onHit(null, 0, g.id, ray);
+    return true;
+  }
   const dist = hit.t;
   const mul = hit.part === 'head' ? def.headMul : (hit.part === 'legs' ? 0.75 : 1);
   const { dmg, armorDmg } = computeDamage(g.id, dist, mul, hit.actor.armor || 0);
   hit.actor.armor = Math.max(0, (hit.actor.armor || 0) - armorDmg);
   hit.actor.hp -= dmg;
-  if (onHit) onHit(hit, dmg, g.id);
+  if (onHit) onHit(hit, dmg, g.id, ray);
   return true;
 }
 

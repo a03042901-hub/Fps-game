@@ -21,7 +21,7 @@ export function initGrenades(scene) {
   }));
   const fragMat = new THREE.MeshStandardMaterial({ color: 0x4a4030, roughness: 0.7 });
   const smokeMat = new THREE.MeshStandardMaterial({
-    color: 0xc8c4bc, transparent: true, opacity: 0.55, depth: 1, depthWrite: false,
+    color: 0xd8d4cc, transparent: true, opacity: 0.5, depth: 1, depthWrite: false, roughness: 1,
   });
   for (const f of frags) {
     f.mesh = new THREE.Mesh(new THREE.SphereGeometry(0.12, 8, 8), fragMat);
@@ -29,9 +29,15 @@ export function initGrenades(scene) {
     scene.add(f.mesh);
   }
   for (const s of smokes) {
-    s.mesh = new THREE.Mesh(new THREE.SphereGeometry(1, 12, 10), smokeMat);
-    s.mesh.visible = false;
-    scene.add(s.mesh);
+    const g = new THREE.Group();
+    for (let i = 0; i < 3; i++) {
+      const puff = new THREE.Mesh(new THREE.SphereGeometry(0.7 + i * 0.25, 10, 8), smokeMat.clone());
+      puff.position.set((i - 1) * 0.5, 0.4 + i * 0.35, (i % 2) * 0.4);
+      g.add(puff);
+    }
+    g.visible = false;
+    scene.add(g);
+    s.mesh = g;
   }
 }
 
@@ -64,13 +70,13 @@ export function throwSmoke(ox, oy, oz, dx, dy, dz) {
   if (s.z > 38) s.z = 38;
   s.t = GRENADES.smoke.duration;
   s.radius = GRENADES.smoke.radius;
-  s.mesh.scale.setScalar(s.radius);
-  s.mesh.position.set(s.x, s.y + 1.2, s.z);
+  s.mesh.scale.setScalar(s.radius * 0.55);
+  s.mesh.position.set(s.x, s.y + 0.2, s.z);
   s.mesh.visible = true;
   return true;
 }
 
-export function tickGrenades(dt, actors, onFragDamage) {
+export function tickGrenades(dt, actors, onFragDamage, onBoom) {
   for (let i = 0; i < frags.length; i++) {
     const f = frags[i];
     if (!f.alive) continue;
@@ -98,6 +104,7 @@ export function tickGrenades(dt, actors, onFragDamage) {
     f.t -= dt;
     if (f.t <= 0) {
       explodeFrag(f, actors, onFragDamage);
+      if (onBoom) onBoom(f.x, f.y, f.z);
       f.alive = false;
       f.mesh.visible = false;
     }
@@ -106,7 +113,9 @@ export function tickGrenades(dt, actors, onFragDamage) {
     const s = smokes[i];
     if (!s.alive) continue;
     s.t -= dt;
-    s.mesh.material.opacity = Math.min(0.55, s.t * 0.12);
+    const op = Math.min(0.5, s.t * 0.1);
+    s.mesh.traverse((c) => { if (c.material) c.material.opacity = op; });
+    s.mesh.rotation.y += dt * 0.15;
     if (s.t <= 0) {
       s.alive = false;
       s.mesh.visible = false;

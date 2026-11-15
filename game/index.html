@@ -22,7 +22,11 @@
   grenades.js   frag bounce blast + smoke vision block
   hud.js        health armor ammo money timer score feed crosshair bomb minimap hit dmg
   audio.js      WebAudio shots steps beeps (no files)
-  main.js       lights fixed 60Hz sim render shot modes
+  materials.js  procedural CanvasTexture sand concrete wood metal
+  viewmodel.js  FP gun body/barrel/mag/sight sway recoil flash reload
+  soldiers.js   low-poly soldiers walk hit-flash death
+  effects.js    tracers sparks decals explosion flash
+  main.js       ACES lights fixed 60Hz sim render shot modes
 -->
 <style>
   :root {
@@ -140,7 +144,7 @@
 
   .overlay {
     position: fixed; inset: 0; display: grid; place-items: center;
-    background: rgba(26,22,18,.82); z-index: 5; pointer-events: auto;
+    background: rgba(26,22,18,.62); z-index: 5; pointer-events: auto;
   }
   .overlay[hidden] { display: none; }
   .panel {

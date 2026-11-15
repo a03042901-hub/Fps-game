@@ -1,12 +1,11 @@
 /** Bot AI: nav roles, hold angles, vision cone, hearing, aim error, plant/defuse. */
-import * as THREE from 'three';
 import { nearestNode, findPath, nodesByTag } from './nav.js';
 import { resolveAABB } from './map.js';
-import { WEAPONS, PALETTE } from './config.js';
-import { tryFire, tickWeapons, beginReload, currentDef } from './weapons.js';
+import { tryFire, tickWeapons, beginReload } from './weapons.js';
 import { makeLoadout, giveWeapon } from './state.js';
 import { smokeBlocks } from './grenades.js';
 import { canPlant, canDefuse, pickupBomb } from './bomb.js';
+import { createSoldierMesh, updateSoldier, setSoldierTeam, flashSoldier } from './soldiers.js';
 
 const SPEED = 4.6;
 const VIEW_DIST = 42;
@@ -21,24 +20,17 @@ const meshes = [];
 export function createBots(scene, count) {
   meshes.length = 0;
   const bots = [];
-  const geo = new THREE.CapsuleGeometry(0.32, 0.9, 4, 8);
-  const headGeo = new THREE.SphereGeometry(0.18, 8, 8);
   for (let i = 0; i < count; i++) {
-    const root = new THREE.Group();
-    const body = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: PALETTE.warden, roughness: 0.7 }));
-    body.position.y = 0.95;
-    body.castShadow = true;
-    const head = new THREE.Mesh(headGeo, new THREE.MeshStandardMaterial({ color: 0xd4b896, roughness: 0.8 }));
-    head.position.y = 1.55;
-    head.castShadow = true;
-    root.add(body);
-    root.add(head);
+    const root = createSoldierMesh(1);
     scene.add(root);
-    meshes.push({ root, body, head });
+    meshes.push(root);
     bots.push(makeBot(i));
   }
   return bots;
 }
+
+export function getBotMesh(i) { return meshes[i]; }
+export function flashBot(i) { flashSoldier(meshes[i]); }
 
 function makeBot(i) {
   return {
@@ -105,24 +97,18 @@ export function setupRoundBots(bots, map, nav, playerTeam, rng) {
     else if (rng() > 0.5) giveWeapon(b.loadout, 'smg');
     else giveWeapon(b.loadout, 'sidearm');
     if (b.armor) b.loadout.armor = b.armor;
-    // Visual color
-    const mat = meshes[i].body.material;
-    mat.color.setHex(b.team === 1 ? PALETTE.warden : PALETTE.raider);
-    meshes[i].root.visible = true;
+    setSoldierTeam(meshes[i], b.team);
+    meshes[i].userData.dead = false;
+    meshes[i].userData.deathT = 0;
+    meshes[i].visible = true;
+    meshes[i].rotation.x = 0;
   }
 }
 
-export function syncBotMeshes(bots) {
+export function syncBotMeshes(bots, dt) {
+  const step = dt || 1 / 60;
   for (let i = 0; i < bots.length; i++) {
-    const b = bots[i];
-    const m = meshes[i];
-    if (!b.alive) { m.root.visible = false; continue; }
-    m.root.visible = true;
-    m.root.position.set(b.x, b.y, b.z);
-    m.root.rotation.y = b.yaw;
-    const scaleY = b.crouch ? 0.7 : 1;
-    m.body.scale.y = scaleY;
-    m.head.position.y = b.crouch ? 1.15 : 1.55;
+    updateSoldier(meshes[i], bots[i], step);
   }
 }
 
@@ -241,6 +227,7 @@ export function stepBots(bots, player, actors, nav, state, map, dt, rng, onBotKi
         const cy = Math.cos(b.yaw), sy = Math.sin(b.yaw);
         _dir.x = -sy * cp; _dir.y = sp; _dir.z = -cy * cp;
         tryFire(b, b.loadout, ox, oy, oz, _dir.x, _dir.y, _dir.z, actors, rng, (hit, dmg, wid) => {
+          if (!hit) return;
           if (hit.actor.hp <= 0) {
             hit.actor.alive = false;
             hit.actor.hp = 0;
