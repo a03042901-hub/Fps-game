@@ -42,13 +42,17 @@ function buildGun(kind, mats) {
     const sight = box(0.05, 0.12, 0.16, dark); sight.position.set(0, 0.18, -0.16); root.add(sight);
     const grip = box(0.11, 0.22, 0.12, dark); grip.position.set(0, -0.18, 0.08); root.add(grip);
   }
-  // Muzzle flash sprite (plane)
-  const flashMat = new THREE.MeshBasicMaterial({
-    color: 0xffe088, transparent: true, opacity: 0, depthWrite: false, side: THREE.DoubleSide,
-  });
-  const flash = new THREE.Mesh(new THREE.PlaneGeometry(0.55, 0.55), flashMat);
-  flash.position.set(0, 0.05, kind === 'sidearm' ? -0.36 : kind === 'sniper' ? -0.82 : -0.78);
+  // Tiny tip glow only — NEVER a PlaneGeometry (camera-facing planes freeze as pale rectangles)
+  const tipZ = kind === 'sidearm' ? -0.34 : kind === 'sniper' ? -0.82 : kind === 'smg' ? -0.54 : -0.76;
+  const flash = new THREE.Mesh(
+    new THREE.BoxGeometry(0.05, 0.05, 0.08),
+    new THREE.MeshBasicMaterial({
+      color: 0xffcc66, transparent: true, opacity: 0, depthWrite: false, depthTest: true,
+    }),
+  );
   flash.name = 'flash';
+  flash.visible = false;
+  flash.position.set(0, kind === 'sidearm' ? 0.04 : 0.05, tipZ);
   root.add(flash);
   return root;
 }
@@ -90,8 +94,8 @@ export function createViewmodel(camera) {
     onFire() {
       st.kick = 0.045;
       st.kickX = (Math.random() - 0.5) * 0.02;
-      st.flashT = 0.05;
-      flashLight.intensity = 2.8;
+      st.flashT = 0.04;
+      flashLight.intensity = 3.2;
     },
     onReload(dur) {
       st.reloadT = dur || 2;
@@ -120,7 +124,13 @@ export function createViewmodel(camera) {
       const gun = guns[st.active];
       if (gun) {
         const flash = gun.getObjectByName('flash');
-        if (flash) flash.material.opacity = st.flashT > 0 ? 0.95 : 0;
+        if (flash) {
+          const on = st.flashT > 0;
+          flash.visible = on;
+          // Keep tip glow small — high opacity on a large plane was the cover artifact
+          flash.material.opacity = on ? Math.min(0.85, st.flashT * 22) : 0;
+          flash.scale.setScalar(on ? 1.15 : 1);
+        }
         const mag = gun.getObjectByName('mag');
         let reloadDrop = 0;
         if (loadout.reloading > 0) {
@@ -139,6 +149,15 @@ export function createViewmodel(camera) {
       }
 
       root.position.set(0.28 + st.swayX * 0.5, -0.28 + st.swayY * 0.3 - (player.crouch ? 0.06 : 0), -0.55);
+    },
+    /** Clear muzzle flash mesh + light (keeps recoil pose). */
+    clearFlash() {
+      st.flashT = 0;
+      flashLight.intensity = 0;
+      for (const g of Object.values(guns)) {
+        const flash = g.getObjectByName('flash');
+        if (flash) { flash.visible = false; flash.material.opacity = 0; }
+      }
     },
   };
 }

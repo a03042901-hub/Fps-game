@@ -17,7 +17,7 @@ import {
 import { startMatch, beginRound, tickRound, resolveObjective } from './rounds.js';
 import { buyItem, rewardKill } from './economy.js';
 import { tickBomb, interruptDefuse, dropBomb, pickupBomb } from './bomb.js';
-import { initGrenades, tickGrenades, throwFrag, throwSmoke } from './grenades.js';
+import { initGrenades, tickGrenades, throwFrag, throwSmoke, clearGrenades } from './grenades.js';
 import { createHud } from './hud.js';
 import { audio } from './audio.js';
 import { createViewmodel } from './viewmodel.js';
@@ -49,7 +49,7 @@ renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.35;
+renderer.toneMappingExposure = 1.42;
 document.getElementById('game').appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
@@ -58,24 +58,24 @@ const skyGeo = new THREE.SphereGeometry(140, 16, 12);
 const skyMat = new THREE.ShaderMaterial({
   side: THREE.BackSide,
   uniforms: {
-    top: { value: new THREE.Color(0x7eb4d4) },
-    bot: { value: new THREE.Color(0xd4c4a0) },
+    top: { value: new THREE.Color(0x8eb8d0) },
+    bot: { value: new THREE.Color(0xe0c8a0) },
   },
   vertexShader: 'varying vec3 vP; void main(){ vP=normalize(position); gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }',
   fragmentShader: 'uniform vec3 top; uniform vec3 bot; varying vec3 vP; void main(){ float h=clamp(vP.y*0.5+0.5,0.0,1.0); gl_FragColor=vec4(mix(bot,top,h),1.0); }',
 });
 scene.add(new THREE.Mesh(skyGeo, skyMat));
-scene.fog = new THREE.Fog(0xd8c8a8, 48, 125);
+scene.fog = new THREE.Fog(0xdfc9a8, 52, 128);
 
 const camera = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.05, 160);
 scene.add(camera);
 
-const ambient = new THREE.AmbientLight(0xfff0e0, 0.35);
+const ambient = new THREE.AmbientLight(0xffe8d0, 0.42);
 scene.add(ambient);
-const hemi = new THREE.HemisphereLight(0xeef6fc, 0xd0b888, 0.85);
+const hemi = new THREE.HemisphereLight(0xfff2e0, 0xc9a878, 0.9);
 scene.add(hemi);
-const sun = new THREE.DirectionalLight(0xfff8ea, 1.7);
-sun.position.set(28, 55, 22);
+const sun = new THREE.DirectionalLight(0xffe2b8, 1.85);
+sun.position.set(34, 48, 18);
 sun.castShadow = true;
 sun.shadow.mapSize.set(2048, 2048);
 sun.shadow.camera.near = 2;
@@ -111,10 +111,10 @@ const bombBody = new THREE.Mesh(
 bombBody.castShadow = true;
 bombMesh.add(bombBody);
 const bombAnt = new THREE.Mesh(
-  new THREE.BoxGeometry(0.06, 0.45, 0.06),
-  new THREE.MeshStandardMaterial({ color: 0x888880, emissive: 0xffaa44, emissiveIntensity: 0.4 }),
+  new THREE.BoxGeometry(0.04, 0.14, 0.04),
+  new THREE.MeshStandardMaterial({ color: 0x5a5040, emissive: 0xff6622, emissiveIntensity: 0.35 }),
 );
-bombAnt.position.y = 0.35;
+bombAnt.position.y = 0.24;
 bombMesh.add(bombAnt);
 bombMesh.visible = false;
 scene.add(bombMesh);
@@ -142,7 +142,7 @@ document.getElementById('play').addEventListener('click', () => {
 });
 
 window.__saltline = {
-  state, player, bots, map,
+  state, player, bots, map, viewmodel, effects,
   forceLive() { state.phase = 'live'; state.phaseT = 90; state.buyOpen = false; },
   skipBuy() { state.phase = 'live'; state.phaseT = 90; state.buyOpen = false; },
   unlockFire() { input.mouse.locked = true; },
@@ -351,6 +351,10 @@ function setupShot() {
   state.frozen = false;
   startMatch(state, player, bots, map, nav, rng);
   for (let i = 0; i < 30; i++) simStep(FIXED_DT);
+  // Wipe FX left over from warm-up sim (bots may have fired / smoked)
+  effects.clearAll();
+  clearGrenades();
+  viewmodel.clearFlash();
 
   if (shot === 'buy') {
     state.phase = 'buy';
@@ -360,13 +364,14 @@ function setupShot() {
     state.scoreW = 0; state.scoreR = 0; state.round = 1;
     player.loadout = makeLoadout();
     giveWeapon(player.loadout, 'sidearm');
-    player.x = 2; player.z = 28; player.yaw = Math.PI * 0.85; player.pitch = -0.08;
+    // Spawn shelter view — avoid lamp posts lining up with the gun
+    player.x = -2; player.z = 32; player.yaw = Math.PI * 1.05; player.pitch = -0.05;
     player.alive = true; player.hp = 100; player.armor = 0;
     viewmodel.show('sidearm');
     viewmodel.update(0, player, player.loadout, false);
     let ai = 0;
     for (const b of bots) {
-      if (b.team === 1) { b.alive = true; b.x = 6 + ai * 2; b.z = 20; b.yaw = Math.PI; ai++; }
+      if (b.team === 1) { b.alive = true; b.x = 4 + ai * 2.2; b.z = 26; b.yaw = Math.PI; ai++; }
     }
   } else if (shot === 'plant') {
     state.phase = 'live';
@@ -376,27 +381,36 @@ function setupShot() {
     state.bomb.planted = true;
     state.bomb.site = 1;
     state.bomb.fuse = 22;
-    state.bomb.x = 32; state.bomb.y = 0.1; state.bomb.z = 28;
+    state.bomb.x = 32.4; state.bomb.y = 0.1; state.bomb.z = 28.0;
     state.bomb.defuseProgress = 1.8;
     state.bomb.carrier = -1;
     player.team = 1;
-    player.x = 29.5; player.z = 24.8; player.y = 0;
-    player.yaw = Math.atan2(-(32 - 29.5), -(28 - 24.8));
-    player.pitch = -0.35;
+    // Crouch-defuse angle: bomb + 2-3 raiders readable, no lamp/pallet occlusion
+    player.x = 29.0; player.z = 25.4; player.y = 0;
+    player.yaw = Math.atan2(-(32.4 - 29.0), -(28.0 - 25.4));
+    player.pitch = -0.22;
     player.alive = true; player.hp = 72; player.armor = 45;
     player.crouch = true; player.eye = 1.05;
     giveWeapon(player.loadout, 'rifle');
     viewmodel.show('rifle');
     viewmodel.update(0, player, player.loadout, false);
+    viewmodel.clearFlash();
     let ei = 0, ai = 0;
     for (const b of bots) {
       if (b.team === 2) {
+        if (ei >= 3) { b.alive = false; continue; }
         b.alive = true; b.hp = 55;
-        b.x = 34.5 + (ei % 2); b.z = 30.5 - ei * 0.8; b.y = 0;
+        b.x = 34.0 + (ei % 2) * 1.6; b.z = 30.0 - ei * 0.85; b.y = 0;
         b.yaw = Math.PI * 0.9; ei++;
       } else {
-        b.alive = true;
-        b.x = 26.5 + ai * 1.2; b.z = 23 + ai * 0.4; b.yaw = 0.4; ai++;
+        // Allies stay off to the side — keep focus on bomb + raiders
+        if (ai === 0) {
+          b.alive = true;
+          b.x = 26.8; b.z = 27.5; b.yaw = 0.6;
+        } else {
+          b.alive = false;
+        }
+        ai++;
       }
     }
   } else if (shot === 'round') {
@@ -424,49 +438,67 @@ function setupShot() {
       } else { b.alive = false; }
     }
   } else {
-    // cover — open firefight at site A: gun, enemies, props, HUD
+    // cover — live firefight at site A: open mid-range view, 3 raiders, gun, tracer, HUD
     state.phase = 'live';
     state.phaseT = 78;
     state.buyOpen = false;
     state.scoreW = 3; state.scoreR = 2;
     state.money = 4100;
     player.team = 1;
-    player.x = 29; player.z = 21; player.y = 0;
-    const ex = 32.5, ez = 29.2;
-    player.yaw = Math.atan2(-(ex - player.x), -(ez - player.z));
-    player.pitch = -0.06;
+    // Stand in the open approach to A (avoid salt wall at 30,18 filling the left third)
+    player.x = 28.2; player.z = 21.8; player.y = 0;
+    const enemies = [
+      { x: 33.2, z: 27.2 }, // center mid
+      { x: 30.6, z: 28.6 }, // left mid
+      { x: 35.0, z: 28.4 }, // right mid
+    ];
+    const aim = enemies[0];
+    player.yaw = Math.atan2(-(aim.x - player.x), -(aim.z - player.z));
+    player.pitch = -0.04;
     player.alive = true; player.hp = 81; player.armor = 70;
     player.loadout = makeLoadout();
     giveWeapon(player.loadout, 'rifle');
     player.loadout.primary.mag = 22;
     player.loadout.armor = 70;
     viewmodel.show('rifle');
+    // Recoil pose + tip light only — flash mesh cleared so no pale rectangle
     viewmodel.onFire();
     viewmodel.update(0, player, player.loadout, true);
-    const enemySpots = [[ex, ez], [35.5, 27], [34, 31]];
+    viewmodel.clearFlash();
     let ei = 0;
     for (const b of bots) {
       if (b.team !== 2) continue;
+      if (ei >= 3) { b.alive = false; continue; }
+      const spot = enemies[ei];
       b.alive = true; b.hp = 55;
-      b.x = enemySpots[ei % 3][0]; b.z = enemySpots[ei % 3][1]; b.y = 0;
-      b.yaw = player.yaw + Math.PI; ei++;
+      b.x = spot.x; b.z = spot.z; b.y = 0;
+      b.yaw = player.yaw + Math.PI + (ei - 1) * 0.4;
+      b.crouch = ei === 2;
+      ei++;
     }
-    let ai = 0;
     for (const b of bots) {
-      if (b.team !== 1) continue;
-      b.alive = true;
-      b.x = 25 + ai * 1.4; b.z = 18 + (ai % 2); b.yaw = player.yaw;
-      ai++;
+      if (b.team === 1) b.alive = false;
     }
-    state.bomb.carrier = 5;
-    state.hitMarker = 0.1;
+    state.bomb.carrier = -1;
+    state.hitMarker = 0.12;
     hud.flashHit();
     eyePos(player, _eye);
     lookDir(player, _dir);
-    effects.tracer(_eye.x, _eye.y, _eye.z, _dir.x, _dir.y, _dir.z, 12);
-    effects.impact(ex, 1.15, ez, 0, 1, 0);
-    effects.impact(ex + 0.8, 0.95, ez - 0.4, 0, 1, 0);
+    // Tracer from gun muzzle (right/down of eye) toward enemy — streak, not head-on blob
+    const yaw = player.yaw;
+    const rx = Math.cos(yaw), rz = -Math.sin(yaw);
+    const mx = _eye.x + _dir.x * 0.9 + rx * 0.24;
+    const my = _eye.y + _dir.y * 0.9 - 0.12;
+    const mz = _eye.z + _dir.z * 0.9 + rz * 0.24;
+    const tx = aim.x - mx, ty = 1.2 - my, tz = aim.z - mz;
+    const tlen = Math.hypot(tx, ty, tz) || 1;
+    effects.tracer(mx, my, mz, tx / tlen, ty / tlen, tz / tlen, Math.min(tlen * 0.92, 12));
+    // Ground sparks near feet (flat discs — never lookAt-up)
+    effects.impact(aim.x + 0.4, 0.05, aim.z - 0.3, 0, 1, 0);
   }
+
+  // Never leave muzzle-flash meshes visible in frozen shots
+  viewmodel.clearFlash();
 
   syncBotMeshes(bots, 0);
   effects.update(0.016);

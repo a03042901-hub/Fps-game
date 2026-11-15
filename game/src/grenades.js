@@ -33,6 +33,7 @@ export function initGrenades(scene) {
     for (let i = 0; i < 3; i++) {
       const puff = new THREE.Mesh(new THREE.SphereGeometry(0.7 + i * 0.25, 10, 8), smokeMat.clone());
       puff.position.set((i - 1) * 0.5, 0.4 + i * 0.35, (i % 2) * 0.4);
+      puff.visible = false;
       g.add(puff);
     }
     g.visible = false;
@@ -73,6 +74,7 @@ export function throwSmoke(ox, oy, oz, dx, dy, dz) {
   s.mesh.scale.setScalar(s.radius * 0.55);
   s.mesh.position.set(s.x, s.y + 0.2, s.z);
   s.mesh.visible = true;
+  s.mesh.traverse((c) => { if (c.isMesh) { c.visible = true; c.material.opacity = 0.5; } });
   return true;
 }
 
@@ -119,6 +121,7 @@ export function tickGrenades(dt, actors, onFragDamage, onBoom) {
     if (s.t <= 0) {
       s.alive = false;
       s.mesh.visible = false;
+      s.mesh.traverse((c) => { if (c.isMesh) c.visible = false; });
     }
   }
 }
@@ -164,5 +167,11 @@ export function smokeBlocks(x0, z0, x1, z1) {
 
 export function clearGrenades() {
   for (const f of frags) { f.alive = false; if (f.mesh) f.mesh.visible = false; }
-  for (const s of smokes) { s.alive = false; if (s.mesh) s.mesh.visible = false; }
+  for (const s of smokes) {
+    s.alive = false;
+    if (s.mesh) {
+      s.mesh.visible = false;
+      s.mesh.traverse((c) => { if (c.isMesh) c.visible = false; });
+    }
+  }
 }

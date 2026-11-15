@@ -228,8 +228,8 @@ export function createMap(scene) {
   for (let z = -14; z <= 14; z += 4) pipes.push([-31, 2.1, z, 3.5, 1, 1, 0, 0, 0]);
   makeInstanced(scene, pipeGeo, M.metal, pipes);
 
-  // Lamps
-  for (const [x, z] of [[20, -20], [-20, -20], [32, 28], [-30, 28], [0, 0], [0, -30], [0, 30], [28, 8], [-28, 0]]) {
+  // Lamps (offset from site centers so poles don't spear through the bomb)
+  for (const [x, z] of [[20, -20], [-20, -20], [36, 22], [-34, 22], [0, 0], [0, -30], [0, 30], [28, 8], [-28, 0]]) {
     const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.1, 3.2, 6), M.metal);
     pole.position.set(x, 1.6, z); scene.add(pole);
     const lamp = new THREE.Mesh(
